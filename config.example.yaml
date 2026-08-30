@@ -1,0 +1,64 @@
+# config.example.yaml — minimal working config
+gitlab:
+  # URL of your GitLab instance (self-hosted or gitlab.com)
+  url: https://gitlab.example.com
+  # Read token from an env var (secure: set in profile/launchd env)
+  token_env: GITLAB_TOKEN
+  # OR read from a file (chmod 0600) instead of env; uncomment to use:
+  # token_file: ~/.secrets/gitlab-token
+
+server:
+  # "http" (streamable HTTP) is recommended to keep the token out of
+  # agent-visible config. "stdio" works too.
+  transport: http
+  listen: 127.0.0.1:8787
+
+# Default policy: actions allowed/denied for any matching project.
+# Resolution: project deny → override → project allow → default allow.
+defaults:
+  allow:
+    - list_projects
+    - get_project
+    - list_branches
+    - search_mrs
+    - get_mr
+    - list_mr_notes
+    - get_mr_changes
+    - create_mr
+    - create_branch
+    - commit_files
+    - list_pipelines
+    - get_pipeline
+    - list_pipeline_jobs
+    - get_job_log
+    - get_trivy_report
+  deny: []
+
+# Merge actions never exist in the catalog, so they cannot be permitted:
+# merge_mr, approve_mr, close_mr are not registered.
+
+projects:
+  # Glob patterns: '*' matches any characters including '/'.
+  - group: "my-group/*"
+    allow:
+      - create_mr
+    # deny: []
+
+# Redaction settings (get_job_log output)
+redaction:
+  enabled: true                     # default true
+  # Custom regexes (whole match → [REDACTED])
+  # patterns:
+  #   - \bMYORG-[A-Z0-9]{8}\b
+  entropy:
+    enabled: false                  # catches random high-entropy strings; false positives possible
+    min_length: 20                  # only consider tokens ≥ this length
+    threshold: 4.5                  # Shannon bits per char
+
+# Trivy report scan extraction
+trivy:
+  file_pattern: "(?i)trivy[^/]*\\.(csv|json|txt|md)$"
+
+# Optional audit log (JSONL, written with 0600 perms)
+# audit:
+#   file: ~/.local/state/gitlab-mcp/audit.log
