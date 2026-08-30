@@ -1,1 +1,18 @@
 gitlab-mcp
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local Python environments
+.venv/
+venv/
+
+# Local credentials and generated reports
+.env
+*.log
+*.csv
+
+# macOS metadata
+.DS_Store
+.idea/
