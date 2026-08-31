@@ -10,19 +10,21 @@ import (
 )
 
 type Config struct {
-	GitLab   GitLabConfig     `yaml:"gitlab"`
-	Server   ServerConfig     `yaml:"server"`
-	Defaults PolicyRules      `yaml:"defaults"`
-	Projects []ProjectRule    `yaml:"projects"`
+	GitLab    GitLabConfig    `yaml:"gitlab"`
+	Server    ServerConfig    `yaml:"server"`
+	Defaults  PolicyRules     `yaml:"defaults"`
+	Projects  []ProjectRule   `yaml:"projects"`
 	Redaction RedactionConfig `yaml:"redaction"`
-	Trivy    TrivyConfig      `yaml:"trivy"`
-	Audit    AuditConfig      `yaml:"audit"`
+	Trivy     TrivyConfig     `yaml:"trivy"`
+	Audit     AuditConfig     `yaml:"audit"`
 }
 
 type GitLabConfig struct {
-	URL       string `yaml:"url"`
-	TokenEnv  string `yaml:"token_env"`
-	TokenFile string `yaml:"token_file"`
+	URL         string `yaml:"url"`
+	TokenEnv    string `yaml:"token_env"`
+	TokenFile   string `yaml:"token_file"`
+	UserEnv     string `yaml:"user_env"`
+	PasswordEnv string `yaml:"password_env"`
 }
 
 type ServerConfig struct {
@@ -44,9 +46,9 @@ type ProjectRule struct {
 }
 
 type RedactionConfig struct {
-	Enabled  *bool           `yaml:"enabled"`  // default true
-	Patterns []string        `yaml:"patterns"` // custom regexes, replaced with [REDACTED]
-	Entropy  EntropyConfig   `yaml:"entropy"`
+	Enabled  *bool         `yaml:"enabled"`  // default true
+	Patterns []string      `yaml:"patterns"` // custom regexes, replaced with [REDACTED]
+	Entropy  EntropyConfig `yaml:"entropy"`
 }
 
 type EntropyConfig struct {
@@ -106,8 +108,11 @@ func (c *Config) validate() error {
 	if c.GitLab.URL == "" {
 		return fmt.Errorf("gitlab.url is required")
 	}
-	if c.GitLab.TokenEnv == "" && c.GitLab.TokenFile == "" {
-		return fmt.Errorf("gitlab.token_env or gitlab.token_file is required")
+	if (c.GitLab.UserEnv == "") != (c.GitLab.PasswordEnv == "") {
+		return fmt.Errorf("gitlab.user_env and gitlab.password_env must be configured together")
+	}
+	if c.GitLab.UserEnv == "" && c.GitLab.TokenEnv == "" && c.GitLab.TokenFile == "" {
+		return fmt.Errorf("gitlab.user_env/password_env, gitlab.token_env, or gitlab.token_file is required")
 	}
 	if c.Server.Transport != "stdio" && c.Server.Transport != "http" {
 		return fmt.Errorf("server.transport must be stdio or http")
@@ -116,6 +121,23 @@ func (c *Config) validate() error {
 		return fmt.Errorf("at least one projects entry is required (default-deny without it)")
 	}
 	return nil
+}
+
+// BasicAuth resolves the configured GitLab username/password credentials. The first
+// return value reports whether basic auth is configured.
+func (c *Config) BasicAuth() (bool, string, string, error) {
+	if c.GitLab.UserEnv == "" && c.GitLab.PasswordEnv == "" {
+		return false, "", "", nil
+	}
+	user := os.Getenv(c.GitLab.UserEnv)
+	if user == "" {
+		return true, "", "", fmt.Errorf("environment variable %s is not set or empty", c.GitLab.UserEnv)
+	}
+	password := os.Getenv(c.GitLab.PasswordEnv)
+	if password == "" {
+		return true, "", "", fmt.Errorf("environment variable %s is not set or empty", c.GitLab.PasswordEnv)
+	}
+	return true, user, password, nil
 }
 
 // Token resolves the GitLab token from the configured source.

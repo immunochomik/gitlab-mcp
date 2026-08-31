@@ -6,6 +6,9 @@ gitlab:
   token_env: GITLAB_TOKEN
   # OR read from a file (chmod 0600) instead of env; uncomment to use:
   # token_file: ~/.secrets/gitlab-token
+  # OR use username/password auth (takes precedence when configured):
+  # user_env: GITLAB_USER
+  # password_env: GITLAB_PASSWORD
 
 server:
   # "http" (streamable HTTP) is recommended to keep the token out of

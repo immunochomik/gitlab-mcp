@@ -35,6 +35,9 @@ Copy `config.example.yaml` to `~/.config/gitlab-mcp/config.yaml` and edit.
 gitlab:
   url: https://gitlab.example.com
   token_env: GITLAB_TOKEN      # or token_file: ... (0600)
+  # For username/password auth instead (takes precedence over token auth):
+  # user_env: GITLAB_USER
+  # password_env: GITLAB_PASSWORD
 server:
   transport: http               # or stdio
   listen: 127.0.0.1:8787
@@ -43,6 +46,21 @@ server:
 **Http transport** (recommended): run as a daemon (launchd/systemd). The token never appears in the agent config; the agent just points at `http://127.0.0.1:8787/mcp`.
 
 **Stdio**: useful if your harness only supports spawning the MCP process; be aware an agent with shell access may read whatever your user can read.
+
+### HTTP smoke test
+
+With the HTTP server running, test session initialization, tool discovery, and
+an MR search with:
+
+```bash
+./scripts/mcp-smoke-test.sh
+```
+
+Pass a different endpoint and project as optional arguments:
+
+```bash
+./scripts/mcp-smoke-test.sh http://127.0.0.1:8787/mcp my-group/my-project
+```
 
 ### Policy resolution
 
@@ -115,32 +133,8 @@ Then configure the agent harness to connect at `http://127.0.0.1:8787/mcp`.
 {
   "mcpServers": {
     "gitlab": {
-      "transport": "streamable-http",
+      "transport": "http",
       "url": "http://127.0.0.1:8787/mcp"
-    }
-  }
-}
-```
-
-**Cursor** (`.cursor/mcp.json`):
-```json
-{
-  "mcpServers": {
-    "gitlab": {
-      "transport": "streamable-http",
-      "url": "http://127.0.0.1:8787/mcp"
-    }
-  }
-}
-```
-
-**VS Code / GitHub Copilot** (`.vscode/mcp.json`):
-```json
-{
-  "servers": {
-    "gitlab": {
-      "type": "sse",
-      "url": "http://127.0.0.1:8787/sse"
     }
   }
 }
@@ -212,4 +206,3 @@ go test ./internal/... -v
 ## Tool catalog and descriptions
 
 Register-all happens even for non-allowed projects; invocation checks policy before executing.
-
