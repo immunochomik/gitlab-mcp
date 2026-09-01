@@ -123,7 +123,7 @@ go build -o gitlab-mcp ./main.go
 Start the server:
 ```bash
 ./gitlab-mcp --config ~/.config/gitlab-mcp/config.yaml
-# logs: gitlab-mcp 0.1.0 listening on 127.0.0.1:8787 (streamable HTTP)
+# logs: gitlab-mcp 0.2.0 listening on 127.0.0.1:8787 (streamable HTTP)
 ```
 
 Then configure the agent harness to connect at `http://127.0.0.1:8787/mcp`.
@@ -206,3 +206,7 @@ go test ./internal/... -v
 ## Tool catalog and descriptions
 
 Register-all happens even for non-allowed projects; invocation checks policy before executing.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
