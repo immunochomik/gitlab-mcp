@@ -11,7 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -34,6 +37,7 @@ const (
 	maxArtifactFile  = 1 << 20
 	maxTreeEntries   = 500
 	maxRawFileBytes  = 512 * 1024
+	maxPipelineDepth = 10
 	defaultTrivyPat  = `(?i)trivy[^/]*\.(csv|json|txt|md)$`
 )
 
@@ -59,9 +63,9 @@ func New(gl *gitlab.Client, pol *policy.Policy, red *redact.Redactor, au *audit.
 }
 
 type handler struct {
-	action        string
-	fn            func(ctx context.Context, args map[string]any) (string, error)
-	needsProject  bool
+	action       string
+	fn           func(ctx context.Context, args map[string]any) (string, error)
+	needsProject bool
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -132,6 +136,21 @@ func getBool(args map[string]any, k string) bool {
 	return v
 }
 
+func getStrings(args map[string]any, k string) []string {
+	var out []string
+	switch values := args[k].(type) {
+	case []string:
+		return values
+	case []any:
+		for _, value := range values {
+			if s, ok := value.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
 func limitArg(args map[string]any) int64 {
 	l := getInt(args, "limit")
 	if l <= 0 {
@@ -199,8 +218,20 @@ func (t *Tools) handlerSpecs() []handlerSpec {
 		}, fn: t.commitFiles},
 		{name: policy.ListPipelines, proj: true, desc: "List pipelines in a project", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithString("status"), mcp.WithString("ref"), mcp.WithNumber("limit")}, fn: t.listPipelines},
 		{name: policy.GetPipeline, proj: true, desc: "Get pipeline status", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithNumber("pipeline_id", mcp.Required())}, fn: t.getPipeline},
-		{name: policy.ListPipelineJobs, proj: true, desc: "List jobs of a pipeline", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithNumber("pipeline_id", mcp.Required()), mcp.WithNumber("limit")}, fn: t.listPipelineJobs},
-		{name: policy.GetJobLog, proj: true, desc: "Get a job log (secrets redacted per server config)", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithNumber("job_id", mcp.Required())}, fn: t.getJobLog},
+		{name: policy.ListPipelineJobs, proj: true, desc: "List pipeline jobs, including retried attempts, status filtering, bridges, and downstream pipelines", opts: []mcp.ToolOption{
+			mcp.WithString("project", mcp.Required()), mcp.WithNumber("pipeline_id", mcp.Required()),
+			mcp.WithArray("scope", mcp.WithStringEnumItems([]string{"created", "waiting_for_resource", "preparing", "pending", "running", "success", "failed", "canceled", "skipped", "manual", "scheduled"})),
+			mcp.WithBoolean("include_retried", mcp.Description("Include jobs hidden by a later retry")),
+			mcp.WithBoolean("include_bridges", mcp.Description("Include trigger/bridge jobs and their downstream pipeline metadata")),
+			mcp.WithBoolean("follow_downstream", mcp.Description("Recursively include jobs from downstream pipelines; implies include_bridges")),
+			mcp.WithNumber("max_depth", mcp.Description("Maximum downstream traversal depth (default 5, maximum 10)")),
+			mcp.WithNumber("page"), mcp.WithNumber("limit"),
+		}, fn: t.listPipelineJobs},
+		{name: policy.GetJobLog, proj: true, desc: "Get a byte range of a job log (secrets redacted per server config)", opts: []mcp.ToolOption{
+			mcp.WithString("project", mcp.Required()), mcp.WithNumber("job_id", mcp.Required()),
+			mcp.WithNumber("offset", mcp.Description("Zero-based raw byte offset (default 0)")),
+			mcp.WithNumber("limit", mcp.Description("Maximum raw bytes to return (default and maximum 262144)")),
+		}, fn: t.getJobLog},
 		{name: policy.GetTrivyReport, proj: true, desc: "Extract trivy scan report files from a job's artifacts", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithNumber("job_id", mcp.Required())}, fn: t.getTrivyReport},
 	}
 }
@@ -560,11 +591,13 @@ func (t *Tools) commitFiles(ctx context.Context, args map[string]any) (string, e
 }
 
 type pipelineSummary struct {
-	ID     int64  `json:"id"`
-	Status string `json:"status"`
-	Ref    string `json:"ref"`
-	SHA    string `json:"sha"`
-	WebURL string `json:"web_url"`
+	ID        int64  `json:"id"`
+	ProjectID int64  `json:"project_id,omitempty"`
+	Project   string `json:"project,omitempty"`
+	Status    string `json:"status"`
+	Ref       string `json:"ref"`
+	SHA       string `json:"sha"`
+	WebURL    string `json:"web_url"`
 }
 
 func (t *Tools) listPipelines(ctx context.Context, args map[string]any) (string, error) {
@@ -599,45 +632,241 @@ func (t *Tools) getPipeline(ctx context.Context, args map[string]any) (string, e
 }
 
 type jobSummary struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Stage  string `json:"stage"`
-	Status string `json:"status"`
-	WebURL string `json:"web_url"`
+	ID                 int64            `json:"id"`
+	Name               string           `json:"name"`
+	Stage              string           `json:"stage"`
+	Status             string           `json:"status"`
+	WebURL             string           `json:"web_url"`
+	Kind               string           `json:"kind,omitempty"`
+	Project            string           `json:"project,omitempty"`
+	PipelineID         int64            `json:"pipeline_id,omitempty"`
+	DownstreamPipeline *pipelineSummary `json:"downstream_pipeline,omitempty"`
 }
 
 func (t *Tools) listPipelineJobs(ctx context.Context, args map[string]any) (string, error) {
 	p := normalizeProject(t.cfg.GitLab.URL, getString(args, "project"))
 	pid := getInt(args, "pipeline_id")
-	opts := &gitlab.ListJobsOptions{ListOptions: gitlab.ListOptions{PerPage: limitArg(args)}}
-	jobs, _, err := t.gl.Jobs.ListPipelineJobs(p, pid, opts, gitlab.WithContext(ctx))
+	opts, err := listJobsOptions(args)
 	if err != nil {
 		return "", err
 	}
+	includeBridges := getBool(args, "include_bridges") || getBool(args, "follow_downstream")
+	maxDepth := getInt(args, "max_depth")
+	if maxDepth <= 0 {
+		maxDepth = 5
+	}
+	if maxDepth > maxPipelineDepth {
+		maxDepth = maxPipelineDepth
+	}
 	out := []jobSummary{}
-	for _, j := range jobs {
-		out = append(out, jobSummary{ID: j.ID, Name: j.Name, Stage: j.Stage, Status: j.Status, WebURL: j.WebURL})
+	seen := map[string]bool{}
+	if err := t.appendPipelineJobs(ctx, p, pid, opts, includeBridges, getBool(args, "follow_downstream"), int(maxDepth), 0, seen, &out); err != nil {
+		return "", err
 	}
 	return toJSON(out), nil
+}
+
+func listJobsOptions(args map[string]any) (*gitlab.ListJobsOptions, error) {
+	opts := &gitlab.ListJobsOptions{ListOptions: gitlab.ListOptions{PerPage: limitArg(args)}}
+	if page := getInt(args, "page"); page > 0 {
+		opts.Page = page
+	}
+	if _, ok := args["include_retried"]; ok {
+		opts.IncludeRetried = ptr(getBool(args, "include_retried"))
+	}
+	if scopes := getStrings(args, "scope"); len(scopes) > 0 {
+		allowed := map[string]bool{
+			"created": true, "waiting_for_resource": true, "preparing": true,
+			"pending": true, "running": true, "success": true, "failed": true,
+			"canceled": true, "skipped": true, "manual": true, "scheduled": true,
+		}
+		values := make([]gitlab.BuildStateValue, 0, len(scopes))
+		for _, scope := range scopes {
+			if !allowed[scope] {
+				return nil, fmt.Errorf("invalid job scope %q", scope)
+			}
+			values = append(values, gitlab.BuildStateValue(scope))
+		}
+		opts.Scope = &values
+	}
+	return opts, nil
+}
+
+func (t *Tools) appendPipelineJobs(ctx context.Context, project string, pipelineID int64, opts *gitlab.ListJobsOptions, includeBridges, follow bool, maxDepth, depth int, seen map[string]bool, out *[]jobSummary) error {
+	key := fmt.Sprintf("%s:%d", project, pipelineID)
+	if seen[key] {
+		return nil
+	}
+	seen[key] = true
+
+	jobs, _, err := t.gl.Jobs.ListPipelineJobs(project, pipelineID, opts, gitlab.WithContext(ctx))
+	if err != nil {
+		return fmt.Errorf("list jobs for %s pipeline %d: %w", project, pipelineID, err)
+	}
+	annotate := includeBridges || follow || depth > 0
+	for _, j := range jobs {
+		summary := jobSummary{ID: j.ID, Name: j.Name, Stage: j.Stage, Status: j.Status, WebURL: j.WebURL}
+		if annotate {
+			summary.Kind = "job"
+			summary.Project = project
+			summary.PipelineID = pipelineID
+		}
+		*out = append(*out, summary)
+	}
+	if !includeBridges {
+		return nil
+	}
+
+	bridges, _, err := t.gl.Jobs.ListPipelineBridges(project, pipelineID, opts, gitlab.WithContext(ctx))
+	if err != nil {
+		return fmt.Errorf("list bridges for %s pipeline %d: %w", project, pipelineID, err)
+	}
+	for _, bridge := range bridges {
+		summary := jobSummary{
+			ID: bridge.ID, Name: bridge.Name, Stage: bridge.Stage, Status: bridge.Status,
+			WebURL: bridge.WebURL, Kind: "bridge", Project: project, PipelineID: pipelineID,
+		}
+		if downstream := bridge.DownstreamPipeline; downstream != nil {
+			summary.DownstreamPipeline = &pipelineSummary{
+				ID: downstream.ID, ProjectID: downstream.ProjectID, Status: downstream.Status, Ref: downstream.Ref,
+				SHA: downstream.SHA, WebURL: downstream.WebURL,
+			}
+			if downstreamProject, err := t.downstreamProject(downstream); err == nil {
+				summary.DownstreamPipeline.Project = downstreamProject
+			}
+		}
+		*out = append(*out, summary)
+		if !follow || bridge.DownstreamPipeline == nil || depth >= maxDepth {
+			continue
+		}
+		downstreamProject, err := t.downstreamProject(bridge.DownstreamPipeline)
+		if err != nil {
+			return fmt.Errorf("follow bridge %d: %w", bridge.ID, err)
+		}
+		if !t.pol.Allowed(policy.ListPipelineJobs, downstreamProject) {
+			return fmt.Errorf("follow bridge %d: action %q is not permitted for downstream project %q", bridge.ID, policy.ListPipelineJobs, downstreamProject)
+		}
+		if err := t.appendPipelineJobs(ctx, downstreamProject, bridge.DownstreamPipeline.ID, opts, true, true, maxDepth, depth+1, seen, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Tools) downstreamProject(pipeline *gitlab.PipelineInfo) (string, error) {
+	base, err := url.Parse(t.cfg.GitLab.URL)
+	if err != nil {
+		return "", fmt.Errorf("invalid configured GitLab URL: %w", err)
+	}
+	u, err := url.Parse(pipeline.WebURL)
+	if err != nil || u.Host != base.Host {
+		return "", fmt.Errorf("cannot resolve downstream project from %q", pipeline.WebURL)
+	}
+	marker := "/-/pipelines/"
+	i := strings.LastIndex(u.Path, marker)
+	if i <= 0 {
+		return "", fmt.Errorf("cannot resolve downstream project from %q", pipeline.WebURL)
+	}
+	projectPath := u.Path[:i]
+	basePath := strings.TrimSuffix(base.Path, "/")
+	if basePath != "" {
+		if !strings.HasPrefix(projectPath, basePath+"/") {
+			return "", fmt.Errorf("cannot resolve downstream project from %q", pipeline.WebURL)
+		}
+		projectPath = strings.TrimPrefix(projectPath, basePath)
+	}
+	project, err := url.PathUnescape(strings.Trim(projectPath, "/"))
+	if err != nil || project == "" {
+		return "", fmt.Errorf("cannot resolve downstream project from %q", pipeline.WebURL)
+	}
+	return project, nil
 }
 
 func (t *Tools) getJobLog(ctx context.Context, args map[string]any) (string, error) {
 	p := normalizeProject(t.cfg.GitLab.URL, getString(args, "project"))
 	jobID := getInt(args, "job_id")
-	r, _, err := t.gl.Jobs.GetTraceFile(p, jobID, gitlab.WithContext(ctx))
+	offset := getInt(args, "offset")
+	if offset < 0 {
+		return "", errors.New("offset must be zero or greater")
+	}
+	limit := getInt(args, "limit")
+	if limit <= 0 || limit > maxLogBytes {
+		limit = maxLogBytes
+	}
+	end := offset + limit - 1
+	if end < offset {
+		return "", errors.New("requested log range overflows")
+	}
+	r, resp, err := t.gl.Jobs.GetTraceFile(p, jobID,
+		gitlab.WithContext(ctx), gitlab.WithHeader("Range", fmt.Sprintf("bytes=%d-%d", offset, end)))
+	if err != nil {
+		// client-go does not currently classify HTTP 206 as successful. It puts
+		// the partial trace in ErrorResponse.Body, so recover that valid payload.
+		var responseErr *gitlab.ErrorResponse
+		if resp == nil || resp.StatusCode != http.StatusPartialContent || !errors.As(err, &responseErr) {
+			return "", err
+		}
+		r = bytes.NewReader(responseErr.Body)
+	}
+
+	responseOffset := offset
+	totalBytes := int64(-1)
+	if resp != nil && resp.StatusCode == http.StatusPartialContent {
+		if start, total, ok := parseContentRange(resp.Header.Get("Content-Range")); ok {
+			responseOffset, totalBytes = start, total
+		}
+	} else {
+		totalBytes = r.Size()
+		responseOffset = offset
+		if offset > totalBytes {
+			offset = totalBytes
+			responseOffset = offset
+		}
+		if _, err := r.Seek(offset, io.SeekStart); err != nil {
+			return "", err
+		}
+	}
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return "", err
 	}
-	data, err := io.ReadAll(io.LimitReader(r, maxLogBytes+1))
-	if err != nil {
-		return "", err
+	if int64(len(data)) > limit {
+		data = data[:limit]
 	}
-	trunc := len(data) > maxLogBytes
-	if trunc {
-		data = data[:maxLogBytes]
-	}
+	nextOffset := responseOffset + int64(len(data))
+	hasMore := totalBytes < 0 && int64(len(data)) == limit || totalBytes >= 0 && nextOffset < totalBytes
 	out := t.red.Redact(string(data))
-	return toJSON(map[string]any{"job_id": jobID, "truncated": trunc, "log": out}), nil
+	result := map[string]any{
+		"job_id": jobID, "offset": responseOffset, "returned_bytes": len(data),
+		"truncated": hasMore, "log": out,
+	}
+	if totalBytes >= 0 {
+		result["total_bytes"] = totalBytes
+	}
+	if hasMore {
+		result["next_offset"] = nextOffset
+	}
+	return toJSON(result), nil
+}
+
+func parseContentRange(value string) (start, total int64, ok bool) {
+	if !strings.HasPrefix(value, "bytes ") {
+		return 0, 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(value, "bytes "), "/")
+	if len(parts) != 2 || parts[1] == "*" {
+		return 0, 0, false
+	}
+	bounds := strings.Split(parts[0], "-")
+	if len(bounds) != 2 {
+		return 0, 0, false
+	}
+	start, err := strconv.ParseInt(bounds[0], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	total, err = strconv.ParseInt(parts[1], 10, 64)
+	return start, total, err == nil
 }
 
 func (t *Tools) getTrivyReport(ctx context.Context, args map[string]any) (string, error) {

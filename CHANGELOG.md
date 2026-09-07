@@ -7,6 +7,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-07
+
+### Added
+
+- Pipeline job status filters, retried-job visibility, pagination, bridge
+  metadata, and policy-checked downstream pipeline traversal.
+- Byte-range job trace retrieval with explicit total size and next-offset
+  metadata for long logs.
+
 ## [0.2.0] - 2026-09-01
 
 ### Added
@@ -30,6 +39,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   audit logging, repository and merge-request tools, pipeline and job tools,
   and HTTP and stdio transports.
 
-[Unreleased]: https://github.com/immunochomik/gitlab-mcp/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/immunochomik/gitlab-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/immunochomik/gitlab-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/immunochomik/gitlab-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/immunochomik/gitlab-mcp/releases/tag/v0.1.0

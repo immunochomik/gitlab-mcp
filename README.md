@@ -84,7 +84,16 @@ All logs pass through the redactor before returned to the agent.
 
 ## Tools details
 
-- `get_job_log` — returns the job trace with log-level redaction applied; truncated at 256 KiB. The `log` field is the redacted content.
+- `list_pipeline_jobs` — accepts `scope` (an array of job statuses),
+  `include_retried`, `page`, and `limit`. Set `include_bridges` to include trigger
+  jobs and downstream pipeline metadata. Set `follow_downstream` to recursively
+  list child-pipeline jobs; traversal defaults to five levels and is capped at
+  ten. Cross-project traversal is allowed only when `list_pipeline_jobs` is
+  permitted for the downstream project too.
+- `get_job_log` — accepts a raw-byte `offset` and `limit` and requests that range
+  from GitLab. Each response includes `returned_bytes`, `total_bytes` when GitLab
+  supplies it, and `next_offset` when more trace data remains. The maximum chunk
+  is 256 KiB, and the returned `log` is redacted.
 - `get_trivy_report` — downloads the artifacts zip for the given `job_id`, looks inside the archive for files matching `trivy.file_pattern` (default `(?i)trivy[^/]*\.(csv|json|txt|md)$`), extracts and redacts them.
 - `commit_files` — sends `files_json` as a JSON array:
   ```json
@@ -123,11 +132,14 @@ go build -o gitlab-mcp ./main.go
 Start the server:
 ```bash
 ./gitlab-mcp --config ~/.config/gitlab-mcp/config.yaml
-# logs: gitlab-mcp 0.2.0 listening on 127.0.0.1:8787 (streamable HTTP)
+# logs: gitlab-mcp 0.3.0 listening on 127.0.0.1:8787 (streamable HTTP)
 ```
 
 Then configure the agent harness to connect at `http://127.0.0.1:8787/mcp`.
 
+```shell
+claude mcp add --transport http http://127.0.0.1:8787/mcp
+```
 **Claude Code** (`.claude.json` or `.mcp.json` in your project root):
 ```json
 {
