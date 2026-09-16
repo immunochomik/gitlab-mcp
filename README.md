@@ -137,14 +137,12 @@ Start the server:
 
 Then configure the agent harness to connect at `http://127.0.0.1:8787/mcp`.
 
-```shell
-claude mcp add --transport http http://127.0.0.1:8787/mcp
-```
-**Claude Code** (`.claude.json` or `.mcp.json` in your project root):
+**Claude Code** (`~/.claude.json` or `.mcp.json` in your project root):
 ```json
 {
   "mcpServers": {
     "gitlab": {
+      "type": "http",
       "transport": "http",
       "url": "http://127.0.0.1:8787/mcp"
     }
