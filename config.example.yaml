@@ -33,6 +33,7 @@ defaults:
     - list_pipelines
     - get_pipeline
     - list_pipeline_jobs
+    - get_job
     - get_job_log
     - get_trivy_report
   deny: []

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	gitlab "gitlab.com/gitlab-org/api/client-go"
@@ -44,6 +45,8 @@ func TestPipelineToolSchemasExposeNewArguments(t *testing.T) {
 		name string
 		want []string
 	}{
+		{policy.ListPipelines, []string{"page", "limit", "created_after", "created_before", "updated_after", "updated_before"}},
+		{policy.GetJob, []string{"project", "job_id"}},
 		{policy.ListPipelineJobs, []string{"scope", "include_retried", "include_bridges", "follow_downstream", "max_depth", "page", "limit"}},
 		{policy.GetJobLog, []string{"offset", "limit"}},
 	} {
@@ -53,6 +56,116 @@ func TestPipelineToolSchemasExposeNewArguments(t *testing.T) {
 				t.Errorf("%s schema is missing %q", tc.name, property)
 			}
 		}
+	}
+}
+
+func TestListPipelinesPaginationAndDateFilters(t *testing.T) {
+	filters := map[string]string{
+		"created_after": "2026-09-01T00:00:00Z", "created_before": "2026-09-14T00:00:00Z",
+		"updated_after": "2026-09-02T00:00:00Z", "updated_before": "2026-09-15T00:00:00Z",
+		"status": "failed", "ref": "main",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v4/projects/group/root/pipelines" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		for key, want := range filters {
+			if got := r.URL.Query().Get(key); got != want {
+				t.Errorf("%s = %q, want %q", key, got, want)
+			}
+		}
+		if got := r.URL.Query().Get("per_page"); got != "100" {
+			t.Errorf("per_page = %q, want 100", got)
+		}
+		switch r.URL.Query().Get("page") {
+		case "2":
+			fmt.Fprint(w, `[{"id":7,"ref":"main","status":"failed"}]`)
+		case "3":
+			fmt.Fprint(w, `[]`)
+		default:
+			t.Errorf("unexpected page: %s", r.URL.RawQuery)
+		}
+	}))
+	defer server.Close()
+	args := map[string]any{"project": "group/root", "page": 2, "limit": 200}
+	for key, value := range filters {
+		args[key] = value
+	}
+	tools := testTools(t, server.URL)
+	out, err := tools.listPipelines(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pipelines []pipelineSummary
+	if err := json.Unmarshal([]byte(out), &pipelines); err != nil || len(pipelines) != 1 || pipelines[0].ID != 7 {
+		t.Fatalf("unexpected pipelines: %s, error: %v", out, err)
+	}
+	args["page"] = 3
+	if out, err := tools.listPipelines(context.Background(), args); err != nil || out != "[]" {
+		t.Fatalf("last page = %q, error: %v", out, err)
+	}
+}
+
+func TestListPipelinesRejectsInvalidDates(t *testing.T) {
+	tools := testTools(t, "https://gitlab.example.com")
+	for _, field := range []string{"created_after", "created_before", "updated_after", "updated_before"} {
+		for _, value := range []any{"yesterday", "2026-09-01", "", 123} {
+			_, err := tools.listPipelines(context.Background(), map[string]any{"project": "group/root", field: value})
+			if err == nil || !strings.Contains(err.Error(), field+" must be an RFC3339 timestamp") {
+				t.Errorf("%s=%v: error = %v", field, value, err)
+			}
+		}
+	}
+}
+
+func TestGetJobReturnsExactNameAndPipeline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v4/projects/group/root/jobs/987" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"id":987,"name":"deploy: [saas, prod]","stage":"deploy","status":"failed","ref":"main","web_url":"https://gitlab.example.com/group/root/-/jobs/987","pipeline":{"id":321,"project_id":8,"ref":"main","sha":"abc","status":"failed"}}`)
+	}))
+	defer server.Close()
+	out, err := testTools(t, server.URL).getJob(context.Background(), map[string]any{"project": "group/root", "job_id": 987})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		jobSummary
+		Ref      string          `json:"ref"`
+		Pipeline pipelineSummary `json:"pipeline"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != 987 || result.Name != "deploy: [saas, prod]" || result.Stage != "deploy" || result.Status != "failed" || result.PipelineID != 321 || result.Pipeline.ID != 321 || result.Pipeline.ProjectID != 8 || result.Pipeline.SHA != "abc" || result.Ref != "main" {
+		t.Fatalf("unexpected job: %s", out)
+	}
+}
+
+func TestGetJobPolicyAndErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"404 Job Not Found"}`, http.StatusNotFound)
+	}))
+	defer server.Close()
+	tools := testTools(t, server.URL)
+	args := map[string]any{"project": "group/root", "job_id": 987}
+	if _, err := tools.authorize(policy.GetJob, true, args); err == nil {
+		t.Fatal("get_job should require explicit permission")
+	}
+	tools.cfg.Defaults.Allow = append(tools.cfg.Defaults.Allow, policy.GetJob)
+	if _, err := tools.authorize(policy.GetJob, true, args); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tools.authorize(policy.GetJob, true, map[string]any{"project": "other/root"}); err == nil {
+		t.Fatal("get_job allowed an unconfigured project")
+	}
+	if _, err := tools.getJob(context.Background(), args); err == nil || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("expected upstream 404, got %v", err)
+	}
+	args["job_id"] = 0
+	if _, err := tools.getJob(context.Background(), args); err == nil || err.Error() != "job_id must be a positive integer" {
+		t.Fatalf("expected invalid ID error, got %v", err)
 	}
 }
 

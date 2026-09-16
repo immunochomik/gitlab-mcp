@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -216,7 +217,15 @@ func (t *Tools) handlerSpecs() []handlerSpec {
 		{name: policy.CommitFiles, proj: true, desc: `Commit files to a branch. files_json is a JSON array of {"path": "...", "content": "...", "action": "create|update|delete"}`, opts: []mcp.ToolOption{
 			mcp.WithString("project", mcp.Required()), mcp.WithString("branch", mcp.Required()), mcp.WithString("commit_message", mcp.Required()), mcp.WithString("files_json", mcp.Required()),
 		}, fn: t.commitFiles},
-		{name: policy.ListPipelines, proj: true, desc: "List pipelines in a project", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithString("status"), mcp.WithString("ref"), mcp.WithNumber("limit")}, fn: t.listPipelines},
+		{name: policy.ListPipelines, proj: true, desc: "List a page of project pipelines, optionally filtered by creation or update time. Increment page to retrieve older results; an empty array means no more results.", opts: []mcp.ToolOption{
+			mcp.WithString("project", mcp.Required()), mcp.WithString("status"), mcp.WithString("ref"),
+			mcp.WithNumber("page", mcp.Description("Page number (default 1)")),
+			mcp.WithNumber("limit", mcp.Description("Results per page (default 20, maximum 100)")),
+			mcp.WithString("created_after", mcp.Description("RFC3339 timestamp, e.g. 2026-09-01T00:00:00Z")),
+			mcp.WithString("created_before", mcp.Description("RFC3339 timestamp")),
+			mcp.WithString("updated_after", mcp.Description("RFC3339 timestamp")),
+			mcp.WithString("updated_before", mcp.Description("RFC3339 timestamp")),
+		}, fn: t.listPipelines},
 		{name: policy.GetPipeline, proj: true, desc: "Get pipeline status", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithNumber("pipeline_id", mcp.Required())}, fn: t.getPipeline},
 		{name: policy.ListPipelineJobs, proj: true, desc: "List pipeline jobs, including retried attempts, status filtering, bridges, and downstream pipelines", opts: []mcp.ToolOption{
 			mcp.WithString("project", mcp.Required()), mcp.WithNumber("pipeline_id", mcp.Required()),
@@ -227,6 +236,9 @@ func (t *Tools) handlerSpecs() []handlerSpec {
 			mcp.WithNumber("max_depth", mcp.Description("Maximum downstream traversal depth (default 5, maximum 10)")),
 			mcp.WithNumber("page"), mcp.WithNumber("limit"),
 		}, fn: t.listPipelineJobs},
+		{name: policy.GetJob, proj: true, desc: "Get a job by ID, including its exact name, stage, status, ref, and pipeline metadata", opts: []mcp.ToolOption{
+			mcp.WithString("project", mcp.Required()), mcp.WithNumber("job_id", mcp.Required()),
+		}, fn: t.getJob},
 		{name: policy.GetJobLog, proj: true, desc: "Get a byte range of a job log (secrets redacted per server config)", opts: []mcp.ToolOption{
 			mcp.WithString("project", mcp.Required()), mcp.WithNumber("job_id", mcp.Required()),
 			mcp.WithNumber("offset", mcp.Description("Zero-based raw byte offset (default 0)")),
@@ -606,6 +618,28 @@ func (t *Tools) listPipelines(ctx context.Context, args map[string]any) (string,
 		Ref:         strOpt(args, "ref"),
 		ListOptions: gitlab.ListOptions{PerPage: limitArg(args)},
 	}
+	if page := getInt(args, "page"); page > 0 {
+		opts.Page = page
+	}
+	for _, filter := range []struct {
+		name string
+		dest **time.Time
+	}{
+		{"created_after", &opts.CreatedAfter}, {"created_before", &opts.CreatedBefore},
+		{"updated_after", &opts.UpdatedAfter}, {"updated_before", &opts.UpdatedBefore},
+	} {
+		if raw, ok := args[filter.name]; ok {
+			value, ok := raw.(string)
+			if !ok {
+				return "", fmt.Errorf("%s must be an RFC3339 timestamp", filter.name)
+			}
+			parsed, err := time.Parse(time.RFC3339, value)
+			if err != nil {
+				return "", fmt.Errorf("%s must be an RFC3339 timestamp: %w", filter.name, err)
+			}
+			*filter.dest = &parsed
+		}
+	}
 	if s := getString(args, "status"); s != "" {
 		v := gitlab.BuildStateValue(s)
 		opts.Status = &v
@@ -641,6 +675,29 @@ type jobSummary struct {
 	Project            string           `json:"project,omitempty"`
 	PipelineID         int64            `json:"pipeline_id,omitempty"`
 	DownstreamPipeline *pipelineSummary `json:"downstream_pipeline,omitempty"`
+}
+
+func (t *Tools) getJob(ctx context.Context, args map[string]any) (string, error) {
+	p := normalizeProject(t.cfg.GitLab.URL, getString(args, "project"))
+	id := getInt(args, "job_id")
+	if id <= 0 {
+		return "", errors.New("job_id must be a positive integer")
+	}
+	job, _, err := t.gl.Jobs.GetJob(p, id, gitlab.WithContext(ctx))
+	if err != nil {
+		return "", err
+	}
+	return toJSON(struct {
+		jobSummary
+		Ref      string          `json:"ref"`
+		Pipeline pipelineSummary `json:"pipeline"`
+	}{
+		jobSummary: jobSummary{ID: job.ID, Name: job.Name, Stage: job.Stage, Status: job.Status,
+			WebURL: job.WebURL, Project: p, PipelineID: job.Pipeline.ID},
+		Ref: job.Ref,
+		Pipeline: pipelineSummary{ID: job.Pipeline.ID, ProjectID: job.Pipeline.ProjectID,
+			Status: job.Pipeline.Status, Ref: job.Pipeline.Ref, SHA: job.Pipeline.Sha},
+	}), nil
 }
 
 func (t *Tools) listPipelineJobs(ctx context.Context, args map[string]any) (string, error) {

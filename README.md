@@ -23,7 +23,7 @@ Writes (optional):
 - `create_branch`, `commit_files`
 
 Pipelines / jobs:
-- `list_pipelines`, `get_pipeline`, `list_pipeline_jobs`, `get_job_log`, `get_trivy_report`
+- `list_pipelines`, `get_pipeline`, `list_pipeline_jobs`, `get_job`, `get_job_log`, `get_trivy_report`
 
 Anything not listed (merge, approve, close, delete, etc.) **is not registered** — the policy layer doesn't need to be consulted; it can't be called.
 
@@ -84,6 +84,15 @@ All logs pass through the redactor before returned to the agent.
 
 ## Tools details
 
+- `list_pipelines` — accepts `page` (default 1), `limit` (default 20, maximum
+  100), `status`, `ref`, and `created_after`, `created_before`, `updated_after`,
+  `updated_before` as RFC3339 timestamps (e.g. `2026-09-01T00:00:00Z`). Increment
+  `page` with the same filters to browse older results; an empty array marks the
+  end. The response remains an array of pipeline summaries.
+- `get_job` — accepts `project` and `job_id`, returning the exact name, stage,
+  status, URL, ref, and pipeline ID/metadata without searching pipeline IDs.
+  Existing configurations must add `get_job` to `defaults.allow` or a project's
+  `allow` list to permit it.
 - `list_pipeline_jobs` — accepts `scope` (an array of job statuses),
   `include_retried`, `page`, and `limit`. Set `include_bridges` to include trigger
   jobs and downstream pipeline metadata. Set `follow_downstream` to recursively
@@ -132,7 +141,7 @@ go build -o gitlab-mcp ./main.go
 Start the server:
 ```bash
 ./gitlab-mcp --config ~/.config/gitlab-mcp/config.yaml
-# logs: gitlab-mcp 0.3.0 listening on 127.0.0.1:8787 (streamable HTTP)
+# logs: gitlab-mcp 0.4.0 listening on 127.0.0.1:8787 (streamable HTTP)
 ```
 
 Then configure the agent harness to connect at `http://127.0.0.1:8787/mcp`.

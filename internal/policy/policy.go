@@ -31,6 +31,7 @@ const (
 	ListPipelines    = "list_pipelines"
 	GetPipeline      = "get_pipeline"
 	ListPipelineJobs = "list_pipeline_jobs"
+	GetJob           = "get_job"
 	GetJobLog        = "get_job_log"
 	GetTrivyReport   = "get_trivy_report"
 )
@@ -40,7 +41,7 @@ var All = []string{
 	ListProjects, GetProject, ListBranches, GetFile, ListTree,
 	SearchMRs, GetMR, ListMRNotes, GetMRChanges, CreateMR,
 	CreateBranch, CommitFiles,
-	ListPipelines, GetPipeline, ListPipelineJobs, GetJobLog, GetTrivyReport,
+	ListPipelines, GetPipeline, ListPipelineJobs, GetJob, GetJobLog, GetTrivyReport,
 }
 
 type Policy struct {

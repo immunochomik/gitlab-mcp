@@ -7,6 +7,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-16
+
+### Added
+
+- Pipeline pagination and RFC3339 creation/update date filters.
+- Policy-controlled `get_job` lookup by job ID with exact name and pipeline metadata.
+
 ## [0.3.0] - 2026-09-07
 
 ### Added
@@ -39,7 +46,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   audit logging, repository and merge-request tools, pipeline and job tools,
   and HTTP and stdio transports.
 
-[Unreleased]: https://github.com/immunochomik/gitlab-mcp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/immunochomik/gitlab-mcp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/immunochomik/gitlab-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/immunochomik/gitlab-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/immunochomik/gitlab-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/immunochomik/gitlab-mcp/releases/tag/v0.1.0
