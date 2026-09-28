@@ -39,7 +39,7 @@ func testTools(t *testing.T, serverURL string) *Tools {
 	return tools
 }
 
-func TestPipelineToolSchemasExposeNewArguments(t *testing.T) {
+func TestToolSchemasExposeNewArguments(t *testing.T) {
 	tools := testTools(t, "https://gitlab.example.com")
 	for _, tc := range []struct {
 		name string
@@ -49,6 +49,7 @@ func TestPipelineToolSchemasExposeNewArguments(t *testing.T) {
 		{policy.GetJob, []string{"project", "job_id"}},
 		{policy.ListPipelineJobs, []string{"scope", "include_retried", "include_bridges", "follow_downstream", "max_depth", "page", "limit"}},
 		{policy.GetJobLog, []string{"offset", "limit"}},
+		{policy.CreateMRNote, []string{"project", "mr_iid", "body"}},
 	} {
 		spec := tools.toolSpec(tc.name)
 		for _, property := range tc.want {
@@ -56,6 +57,64 @@ func TestPipelineToolSchemasExposeNewArguments(t *testing.T) {
 				t.Errorf("%s schema is missing %q", tc.name, property)
 			}
 		}
+	}
+}
+
+func TestCreateMRNote(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v4/projects/group/root/merge_requests/42/notes" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Body string `json:"body"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Body != "Please check the migration." {
+			t.Errorf("body = %q", payload.Body)
+		}
+		fmt.Fprint(w, `{"id":123,"body":"Please check the migration."}`)
+	}))
+	defer server.Close()
+	tools := testTools(t, server.URL)
+	args := map[string]any{"project": "group/root", "mr_iid": 42, "body": "Please check the migration."}
+	if _, err := tools.authorize(policy.CreateMRNote, true, args); err == nil {
+		t.Fatal("create_mr_note should require explicit permission")
+	}
+	tools.cfg.Defaults.Allow = append(tools.cfg.Defaults.Allow, policy.CreateMRNote)
+	if _, err := tools.authorize(policy.CreateMRNote, true, args); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tools.authorize(policy.CreateMRNote, true, map[string]any{"project": "other/root"}); err == nil {
+		t.Fatal("create_mr_note allowed an unconfigured project")
+	}
+	for _, invalid := range []map[string]any{
+		{"project": "group/root", "mr_iid": 0, "body": "hello"},
+		{"project": "group/root", "mr_iid": 42, "body": "  "},
+	} {
+		if _, err := tools.createMRNote(context.Background(), invalid); err == nil {
+			t.Errorf("expected validation error for %#v", invalid)
+		}
+	}
+	if requests != 0 {
+		t.Fatalf("invalid input sent %d requests", requests)
+	}
+	out, err := tools.createMRNote(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var note struct {
+		ID   int64  `json:"id"`
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(out), &note); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || note.ID != 123 || note.Body != "Please check the migration." {
+		t.Fatalf("requests = %d, note = %#v", requests, note)
 	}
 }
 

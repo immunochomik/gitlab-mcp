@@ -209,6 +209,7 @@ func (t *Tools) handlerSpecs() []handlerSpec {
 		{name: policy.SearchMRs, proj: true, desc: "List/search merge requests in a project (any author)", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithString("state"), mcp.WithString("author"), mcp.WithString("search"), mcp.WithNumber("limit")}, fn: t.searchMRs},
 		{name: policy.GetMR, proj: true, desc: "Get merge request details", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithNumber("mr_iid", mcp.Required())}, fn: t.getMR},
 		{name: policy.ListMRNotes, proj: true, desc: "List comments/notes on a merge request", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithNumber("mr_iid", mcp.Required()), mcp.WithNumber("limit")}, fn: t.listMRNotes},
+		{name: policy.CreateMRNote, proj: true, desc: "Post a general comment on a merge request", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithNumber("mr_iid", mcp.Required()), mcp.WithString("body", mcp.Required())}, fn: t.createMRNote},
 		{name: policy.GetMRChanges, proj: true, desc: "Get merge request diff (can be large)", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithNumber("mr_iid", mcp.Required())}, fn: t.getMRChanges},
 		{name: policy.CreateMR, proj: true, desc: "Create a merge request (never merges)", opts: []mcp.ToolOption{
 			mcp.WithString("project", mcp.Required()), mcp.WithString("title", mcp.Required()), mcp.WithString("source_branch", mcp.Required()), mcp.WithString("target_branch"), mcp.WithString("description"),
@@ -491,6 +492,23 @@ func (t *Tools) listMRNotes(ctx context.Context, args map[string]any) (string, e
 		out = append(out, nt)
 	}
 	return toJSON(out), nil
+}
+
+func (t *Tools) createMRNote(ctx context.Context, args map[string]any) (string, error) {
+	p := normalizeProject(t.cfg.GitLab.URL, getString(args, "project"))
+	iid := getInt(args, "mr_iid")
+	if iid <= 0 {
+		return "", errors.New("mr_iid must be a positive integer")
+	}
+	body := getString(args, "body")
+	if strings.TrimSpace(body) == "" {
+		return "", errors.New("body must not be empty")
+	}
+	note, _, err := t.gl.Notes.CreateMergeRequestNote(p, iid, &gitlab.CreateMergeRequestNoteOptions{Body: ptr(body)}, gitlab.WithContext(ctx))
+	if err != nil {
+		return "", err
+	}
+	return toJSON(map[string]any{"id": note.ID, "body": note.Body}), nil
 }
 
 func (t *Tools) getMRChanges(ctx context.Context, args map[string]any) (string, error) {

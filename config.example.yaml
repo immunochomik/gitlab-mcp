@@ -46,6 +46,7 @@ projects:
   - group: "my-group/*"
     allow:
       - create_mr
+      - create_mr_note
     # deny: []
 
 # Redaction settings (get_job_log output)

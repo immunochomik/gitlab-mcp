@@ -24,6 +24,7 @@ const (
 	SearchMRs        = "search_mrs"
 	GetMR            = "get_mr"
 	ListMRNotes      = "list_mr_notes"
+	CreateMRNote     = "create_mr_note"
 	GetMRChanges     = "get_mr_changes"
 	CreateMR         = "create_mr"
 	CreateBranch     = "create_branch"
@@ -39,7 +40,7 @@ const (
 // All is the full action catalog.
 var All = []string{
 	ListProjects, GetProject, ListBranches, GetFile, ListTree,
-	SearchMRs, GetMR, ListMRNotes, GetMRChanges, CreateMR,
+	SearchMRs, GetMR, ListMRNotes, CreateMRNote, GetMRChanges, CreateMR,
 	CreateBranch, CommitFiles,
 	ListPipelines, GetPipeline, ListPipelineJobs, GetJob, GetJobLog, GetTrivyReport,
 }

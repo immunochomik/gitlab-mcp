@@ -7,6 +7,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-28
+
+### Added
+
+- Policy-controlled `create_mr_note` action for posting general merge request comments.
+
 ## [0.4.0] - 2026-09-16
 
 ### Added
@@ -46,7 +52,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   audit logging, repository and merge-request tools, pipeline and job tools,
   and HTTP and stdio transports.
 
-[Unreleased]: https://github.com/immunochomik/gitlab-mcp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/immunochomik/gitlab-mcp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/immunochomik/gitlab-mcp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/immunochomik/gitlab-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/immunochomik/gitlab-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/immunochomik/gitlab-mcp/compare/v0.1.0...v0.2.0
