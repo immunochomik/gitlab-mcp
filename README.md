@@ -17,7 +17,7 @@ Projects, branches, files:
 - `list_projects`, `get_project`, `list_branches`, `get_file`, `list_tree`
 
 Merge requests:
-- `search_mrs`, `get_mr`, `list_mr_notes`, `create_mr_note`, `get_mr_changes`, `create_mr` (never merges)
+- `search_mrs`, `get_mr`, `list_mr_notes`, `create_mr_note`, `get_mr_changes`, `create_mr`, `update_mr` (never merges)
 
 Writes (optional):
 - `create_branch`, `commit_files`
@@ -115,6 +115,7 @@ All logs pass through the redactor before returned to the agent.
 - `create_branch` — if `ref` omitted, uses the project's default branch.
 - `create_mr` — requires `title` and `source_branch`; `target_branch` picks the project's default branch if absent. This only *creates* the MR; there is no way to merge (by design).
 - `create_mr_note` — posts a general MR comment using `project`, `mr_iid`, and `body`. Add it to a project's `allow` list to enable it; it does not create a comment on a specific diff line.
+- `update_mr` — changes an MR's `title` or `description` using `project` and `mr_iid`. At least one field is required; an empty `description` clears it. Add `update_mr` to `defaults.allow` or a project's `allow` list to enable it.
 
 ## Threat model
 
@@ -142,7 +143,7 @@ go build -o gitlab-mcp ./main.go
 Start the server:
 ```bash
 ./gitlab-mcp --config ~/.config/gitlab-mcp/config.yaml
-# logs: gitlab-mcp 0.5.0 listening on 127.0.0.1:8787 (streamable HTTP)
+# logs: gitlab-mcp 0.6.0 listening on 127.0.0.1:8787 (streamable HTTP)
 ```
 
 Then configure the agent harness to connect at `http://127.0.0.1:8787/mcp`.

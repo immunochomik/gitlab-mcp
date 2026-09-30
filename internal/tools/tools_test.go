@@ -50,6 +50,7 @@ func TestToolSchemasExposeNewArguments(t *testing.T) {
 		{policy.ListPipelineJobs, []string{"scope", "include_retried", "include_bridges", "follow_downstream", "max_depth", "page", "limit"}},
 		{policy.GetJobLog, []string{"offset", "limit"}},
 		{policy.CreateMRNote, []string{"project", "mr_iid", "body"}},
+		{policy.UpdateMR, []string{"project", "mr_iid", "title", "description"}},
 	} {
 		spec := tools.toolSpec(tc.name)
 		for _, property := range tc.want {
@@ -57,6 +58,78 @@ func TestToolSchemasExposeNewArguments(t *testing.T) {
 				t.Errorf("%s schema is missing %q", tc.name, property)
 			}
 		}
+	}
+}
+
+func TestUpdateMR(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v4/projects/group/root/merge_requests/42" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if requests == 1 {
+			if len(payload) != 1 || payload["description"] != "" {
+				t.Errorf("description payload = %#v", payload)
+			}
+			fmt.Fprint(w, `{"iid":42,"title":"Existing title","description":"","web_url":"https://gitlab.example.com/group/root/-/merge_requests/42"}`)
+		} else {
+			if len(payload) != 1 || payload["title"] != "New title" {
+				t.Errorf("title payload = %#v", payload)
+			}
+			fmt.Fprint(w, `{"iid":42,"title":"New title","description":""}`)
+		}
+	}))
+	defer server.Close()
+	tools := testTools(t, server.URL)
+	args := map[string]any{"project": "group/root", "mr_iid": 42, "description": ""}
+	if _, err := tools.authorize(policy.UpdateMR, true, args); err == nil {
+		t.Fatal("update_mr should require explicit permission")
+	}
+	tools.cfg.Defaults.Allow = append(tools.cfg.Defaults.Allow, policy.UpdateMR)
+	if _, err := tools.authorize(policy.UpdateMR, true, args); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tools.authorize(policy.UpdateMR, true, map[string]any{"project": "other/root"}); err == nil {
+		t.Fatal("update_mr allowed an unconfigured project")
+	}
+	for _, invalid := range []map[string]any{
+		{"project": "group/root", "mr_iid": 0, "description": "text"},
+		{"project": "group/root", "mr_iid": 42},
+		{"project": "group/root", "mr_iid": 42, "title": "  "},
+		{"project": "group/root", "mr_iid": 42, "description": 123},
+	} {
+		if _, err := tools.updateMR(context.Background(), invalid); err == nil {
+			t.Errorf("expected validation error for %#v", invalid)
+		}
+	}
+	if requests != 0 {
+		t.Fatalf("invalid input sent %d requests", requests)
+	}
+	out, err := tools.updateMR(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		IID         int64  `json:"iid"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || result.IID != 42 || result.Title != "Existing title" || result.Description != "" {
+		t.Fatalf("requests = %d, result = %#v", requests, result)
+	}
+	if _, err := tools.updateMR(context.Background(), map[string]any{"project": "group/root", "mr_iid": 42, "title": "New title"}); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("title update sent %d total requests", requests)
 	}
 }
 

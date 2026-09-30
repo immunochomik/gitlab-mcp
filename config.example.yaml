@@ -47,6 +47,7 @@ projects:
     allow:
       - create_mr
       - create_mr_note
+      - update_mr
     # deny: []
 
 # Redaction settings (get_job_log output)

@@ -214,6 +214,9 @@ func (t *Tools) handlerSpecs() []handlerSpec {
 		{name: policy.CreateMR, proj: true, desc: "Create a merge request (never merges)", opts: []mcp.ToolOption{
 			mcp.WithString("project", mcp.Required()), mcp.WithString("title", mcp.Required()), mcp.WithString("source_branch", mcp.Required()), mcp.WithString("target_branch"), mcp.WithString("description"),
 		}, fn: t.createMR},
+		{name: policy.UpdateMR, proj: true, desc: "Update a merge request title or description (never merges)", opts: []mcp.ToolOption{
+			mcp.WithString("project", mcp.Required()), mcp.WithNumber("mr_iid", mcp.Required()), mcp.WithString("title"), mcp.WithString("description"),
+		}, fn: t.updateMR},
 		{name: policy.CreateBranch, proj: true, desc: "Create a branch from a ref (defaults to project default branch)", opts: []mcp.ToolOption{mcp.WithString("project", mcp.Required()), mcp.WithString("branch", mcp.Required()), mcp.WithString("ref")}, fn: t.createBranch},
 		{name: policy.CommitFiles, proj: true, desc: `Commit files to a branch. files_json is a JSON array of {"path": "...", "content": "...", "action": "create|update|delete"}`, opts: []mcp.ToolOption{
 			mcp.WithString("project", mcp.Required()), mcp.WithString("branch", mcp.Required()), mcp.WithString("commit_message", mcp.Required()), mcp.WithString("files_json", mcp.Required()),
@@ -546,6 +549,40 @@ func (t *Tools) createMR(ctx context.Context, args map[string]any) (string, erro
 		return "", err
 	}
 	return toJSON(mrSum(&m.BasicMergeRequest)), nil
+}
+
+func (t *Tools) updateMR(ctx context.Context, args map[string]any) (string, error) {
+	p := normalizeProject(t.cfg.GitLab.URL, getString(args, "project"))
+	iid := getInt(args, "mr_iid")
+	if iid <= 0 {
+		return "", errors.New("mr_iid must be a positive integer")
+	}
+	opts := &gitlab.UpdateMergeRequestOptions{}
+	if value, exists := args["title"]; exists {
+		title, ok := value.(string)
+		if !ok || strings.TrimSpace(title) == "" {
+			return "", errors.New("title must not be empty")
+		}
+		opts.Title = &title
+	}
+	if value, exists := args["description"]; exists {
+		description, ok := value.(string)
+		if !ok {
+			return "", errors.New("description must be a string")
+		}
+		opts.Description = &description
+	}
+	if opts.Title == nil && opts.Description == nil {
+		return "", errors.New("title or description is required")
+	}
+	m, _, err := t.gl.MergeRequests.UpdateMergeRequest(p, iid, opts, gitlab.WithContext(ctx))
+	if err != nil {
+		return "", err
+	}
+	return toJSON(struct {
+		mrSummary
+		Description string `json:"description"`
+	}{mrSummary: mrSum(&m.BasicMergeRequest), Description: m.Description}), nil
 }
 
 func (t *Tools) createBranch(ctx context.Context, args map[string]any) (string, error) {
